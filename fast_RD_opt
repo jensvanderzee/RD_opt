@@ -1,0 +1,115 @@
+using DifferentialEquations, LinearAlgebra, BenchmarkTools
+using Plots
+# Generate the constants
+p = (0.2, 0.8, 1.0, 0.2, 100.0) # a,α,ubar,β,D1,D2
+N = 40
+Ax = Array(Tridiagonal([1.0 for i in 1:(N - 1)], [-2.0 for i in 1:N],
+    [1.0 for i in 1:(N - 1)]))
+Ay = copy(Ax)
+Ax[2, 1] = 2.0
+Ax[end - 1, end] = 2.0
+Ay[1, 2] = 2.0
+Ay[end, end - 1] = 2.0
+
+const mAx = Ax
+const mAy = Ay
+
+function basic_version!(dr, r, p, t)
+    a, α, ubar, D1, D2 = p
+    u = r[:, :, 1]
+    v = r[:, :, 2]
+    Du = D2 * (mAy * u + u * mAx)
+    Dv = D1 * (mAy * v + v * mAx)
+    dr[:, :, 1] = Du .- a .* u .+ α .- u .* v .* v .* ubar 
+    dr[:, :, 2] = Dv .- a .* v .+ u .* v .* v .* ubar 
+end
+
+a, α, ubar, D1, D2 = p
+uss = (ubar + 10) / (α*100)
+vss = (a / 10) * uss^2
+r0 = zeros(N, N, 2)
+r0[:, :, 1] .= rand.()
+r0[:, :, 2] .= rand.()
+
+prob = ODEProblem(basic_version!, r0, (0.0, 40.0), p)
+@time tsol = solve(prob, ROCK2(), saveat=1.0);
+@time tsol = solve(prob, ROCK2(), saveat=1.0, abstol=1e-6, reltol=1e-6);
+heatmap(tsol[:,:,2,21])
+anim = @animate for k in 1:length(tsol)
+    heatmap(tsol[:,:,2,k], title="$k", clims=(0,7))#, clims=(0,0.04)) # 2:end since end = 1, periodic condition
+end
+gif(anim, "Brusselator2Dsol_u.gif", fps = 13)
+
+
+
+
+
+ps = [0.2, 0.6, 0.5, 0.35, 200.0];  
+
+#ps = [0.2, 0.8, 1, 0.2, 100.0] # Initial guess for model parameters
+function predict(θ)
+    Array(solve(prob, ROCK2(), p = θ, saveat = 1.0, abstol=1e-6, reltol=1e-6)) 
+end
+
+mypred = predict(ps)
+## Defining Loss function
+function loss(θ)
+    pred = predict(θ)
+    #print(pred)
+    l = predict(θ) - tsol
+    return sum(abs2, l) #, pred # Mean squared error
+end
+l, pred = loss(ps)
+size(pred), size(tsol) # Checking sizes
+
+LOSS = []                              # Loss accumulator
+PRED = []                              # prediction accumulator
+PARS = []           
+
+
+callback = function (θ, l, pred) #callback function to observe training
+    display(l)
+    display([θ])
+    #append!(PRED, [pred])
+    append!(LOSS, l)
+    append!(PARS, [θ])
+    false
+end
+
+callback = function (θ, l) #callback function to observe training
+    display(l)
+    display([θ])
+    #append!(PRED, [pred])
+    append!(LOSS, l)
+    append!(PARS, [θ])
+    false
+end
+
+
+callback(ps, loss(ps)...) # Testing callback function
+
+# Let see prediction vs. Truth
+scatter(tsol[Int64(floor(m / 2 )),:, 2, end], label = "Truth", size = (800, 500))
+plot!(PRED[end][Int64(floor(m / 2)),:,2, end], lw = 2, label = "Prediction")
+
+using Zygote
+using SciMLSensitivity, Optimization, OptimizationPolyalgorithms
+using OptimizationOptimisers
+adtype = Optimization.AutoForwardDiff()
+optf = Optimization.OptimizationFunction((x, p) -> loss(x), adtype)
+optprob = Optimization.OptimizationProblem(optf, ps)  
+res = Optimization.solve(optprob, OptimizationOptimisers.Adam(1.0, (0.9, 0.999)), callback = callback, maxiters=5, abstol=1e-6, reltol=1e-6)
+1+1
+function loss(θ)
+    pred = predict(θ)
+    #print(pred)
+    l = predict(θ) - tsol
+    
+    return sum(abs2, l) # Mean squared error
+end
+
+
+
+predict(ps) - tsol
+sum(abs2, predict(ps) - tsol)
+gradient(loss,ps)
